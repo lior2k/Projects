@@ -1,0 +1,242 @@
+package src.chatapp.main;
+import java.io.*;
+import java.net.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Vector;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class Server implements Runnable {
+    private final ServerSocket server_socket;
+    private final Vector<HandleClient> clients;
+    private final ExecutorService pool;
+
+    private final ArrayList<String> fileNames;
+
+    public Server() throws IOException {
+        server_socket = new ServerSocket(5000);
+        clients = new Vector<>();
+        pool = Executors.newCachedThreadPool();
+        fileNames = new ArrayList<>();
+        initFiles();
+        System.out.println("----- Server is running! -----");
+    }
+
+    private void initFiles() {
+        File folder = new File("resources/files");
+        File[] listOfFiles = folder.listFiles();
+        for (File file : listOfFiles) {
+            if (file.isFile()) {
+                fileNames.add(file.getName());
+            }
+        }
+    }
+
+    @Override
+    public void run() {
+        try {
+            while (true) {
+                Socket client = server_socket.accept();
+                HandleClient hc = new HandleClient(client);
+                clients.add(hc);
+                pool.execute(hc);
+            }
+        } catch(IOException E) {
+            E.printStackTrace();
+        }
+    }
+
+    public void broadcast(String message) {
+        for(HandleClient client : clients) {
+            if (client != null) {
+                client.sendMessage(message);
+            }
+        }
+    }
+
+    public HandleClient getClient(String name) {
+        HandleClient ret = null;
+        for(HandleClient client : clients) {
+            if (client.user_name.equals(name)) {
+                ret = client;
+                break;
+            }
+        }
+        return ret;
+    }
+
+    public class HandleClient implements Runnable {
+        private final Socket client_socket;
+        private final BufferedReader in;
+        private final PrintWriter out;
+        private String user_name;
+
+        public HandleClient(Socket client) throws IOException {
+            this.client_socket = client;
+            out = new PrintWriter(client_socket.getOutputStream(), true);
+            in = new BufferedReader(new InputStreamReader(client_socket.getInputStream()));
+        }
+
+        private void updateOnline() {
+            StringBuilder st = new StringBuilder("!update_online!");
+            for (HandleClient client : clients) {
+                st.append(",").append(client.user_name);
+            }
+            System.out.println("debug: sending online users: " + st);
+            broadcast(st.toString());
+        }
+
+        private void updateFileList() {
+            StringBuilder st = new StringBuilder("!update_files!");
+            for (String file_name : fileNames) {
+                st.append(",").append(file_name);
+            }
+            System.out.println("debug: sending file list: " + st);
+            broadcast(st.toString());
+        }
+
+        private void sendMessage(String message) {
+            out.println(message);
+        }
+
+        private HashMap<Integer, byte[]> readFile(String fileName) throws IOException {
+            HashMap<Integer, byte[]> fileData = new HashMap<>();
+            FileInputStream fileStream = new FileInputStream("resources\\files\\" + fileName);
+            byte[] buffer = new byte[2046];
+            int bytesRead = -1;
+            int i = 1;
+            String sequence_num_str;
+            while ((bytesRead = fileStream.read(buffer)) != -1) {
+                sequence_num_str = (i < 10) ? "0" + i : "" + i;
+                byte[] sequence_num_bytes = sequence_num_str.getBytes();
+                byte[] bytes = new byte[2048];
+                bytes[0] = sequence_num_bytes[0];
+                bytes[1] = sequence_num_bytes[1];
+                System.arraycopy(buffer, 0, bytes, 2, 2046);
+                fileData.put(i, bytes);
+                i++;
+            }
+            fileStream.close();
+            return fileData;
+        }
+
+        @Override
+        public void run() {
+            try {
+                String client_username = in.readLine();
+                this.user_name = client_username;
+                System.out.println(client_username + " connected!");
+                broadcast(client_username + " joined the chat!");
+                updateOnline();
+                updateFileList();
+                String message;
+                while((message = in.readLine()) != null) {
+                    System.out.println("debug: received " + message);
+                    if (message.startsWith("!quit")) {
+                        broadcast(client_username + " left the chat!");
+                        clients.remove(this);
+                        updateOnline();
+                        break;
+                    } else if (message.startsWith("<>")) {
+                        String[] messageSplit = message.split("<>");
+                        String client_name = messageSplit[1];
+                        String msg = messageSplit[2];
+                        HandleClient target = getClient(client_name);
+                        if (target != null) {
+                            target.out.println("<>private<>" + this.user_name + "<>" + msg);
+                        }
+                    } else if (message.startsWith("><fileRequest><")) {
+                        String[] messageSplit = message.split("><");
+                        String fileName = messageSplit[2]; // including suffix (type) eg .txt
+                        if (!fileNames.contains(fileName)) {
+                            System.out.println("File - '" + fileName + "' - not found, download process stopped");
+                        } else {
+                            // get and send file meta data;
+                            HashMap<Integer, byte[]> fileData = readFile(fileName);
+                            String metaData = "!file_data!," + fileName + "," + fileData.size(); // fileData = num of packets.
+                            out.println(metaData);
+                            //send file in a new thread over udp connection
+                            SendFileThread sft = new SendFileThread(fileData);
+                            sft.start();
+                        }
+                    } else {
+                        broadcast(client_username + ": " + message);
+                    }
+                }
+            } catch (IOException E) {
+                System.out.println("exception during handle client run method");
+                E.printStackTrace();
+            }
+        }
+    }
+
+    public static class SendFileThread extends Thread {
+        private final HashMap<Integer, byte[]> fileData;
+        private DatagramSocket udpSocket;
+        private InetAddress ip;
+
+        public SendFileThread(HashMap<Integer, byte[]> fileData) {
+            this.fileData = fileData;
+            try {
+                int sockTimeOut = 2500;
+                int listenPort = 2000;
+                udpSocket = new DatagramSocket(listenPort);
+                udpSocket.setReuseAddress(true);
+                udpSocket.setSoTimeout(sockTimeOut);
+                ip = InetAddress.getLocalHost();
+            } catch (SocketException | UnknownHostException e) {
+                e.printStackTrace();
+            }
+        }
+
+        @Override
+        public void run() {
+            try {
+                while (true) {
+                    int bufSize = 2048;
+                    byte[] bufferRec = new byte[bufSize /2];
+                    udpSocket.receive(new DatagramPacket(bufferRec, bufferRec.length));
+                    String client_answer = data(bufferRec).toString();
+                    if (client_answer.equals("done")) {
+                        System.out.println("received done");
+                        break;
+                    }
+                    String[] missing_packets = client_answer.split(",");
+
+                    int sendPort = 2002;
+                    for (String packet_num : missing_packets)
+                        if (!packet_num.equals("")) {
+                            udpSocket.send(new DatagramPacket(fileData.get(Integer.parseInt(packet_num)), bufSize, ip, sendPort));
+                        }
+                }
+            } catch (IOException e) {
+                System.out.println("Timed out, rerunning...");
+                this.run();
+            }
+            udpSocket.close();
+        }
+
+        public static StringBuilder data(byte[] a) {
+            if (a == null)
+                return null;
+            StringBuilder ret = new StringBuilder();
+            int i = 0;
+            while (i < a.length && a[i] != 0)
+                ret.append((char) a[i++]);
+            return ret;
+        }
+    }
+
+    public static void main(String[] args) {
+        try {
+            Server server = new Server();
+            server.run();
+        } catch (IOException E) {
+            System.out.println("exception during server constructor");
+            E.printStackTrace();
+            System.exit(0);
+        }
+    }
+
+}
