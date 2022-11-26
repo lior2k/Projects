@@ -207,10 +207,10 @@ public class ClientController {
             try {
                 while (true) {
                     String missing_packets = checkSum();
-//                    System.out.println("debug: missing packets: " + missing_packets);
+                    System.out.println("debug: missing packets sent to server: " + missing_packets);
                     int sendPort = 2000;
                     if (missing_packets.equals("")) {
-//                        System.out.println("debug: received all packets, done.");
+                        System.out.println("debug: received all packets, done.");
                         byte[] bufferSend = "done".getBytes();
                         udpSocket.send(new DatagramPacket(bufferSend, bufferSend.length, ip, sendPort));
                         break;
@@ -218,7 +218,7 @@ public class ClientController {
 
                     byte[] packets_num = missing_packets.getBytes();
                     udpSocket.send(new DatagramPacket(packets_num, packets_num.length, ip, sendPort));
-
+                    System.out.print("Receiving packets: ");
                     int missing_packets_num = missing_packets.split(",").length - 1;
                     for (int i = 0; i <= missing_packets_num; i++) {
                         int bufSize = 2048;
@@ -226,14 +226,15 @@ public class ClientController {
                         udpSocket.receive(new DatagramPacket(bufferRec, bufferRec.length));
                         int seq_num = Integer.parseInt("" + (char)bufferRec[0] + (char)bufferRec[1]);
                         if (fileData.get(seq_num) == null) {
-//                            System.out.println("received packet num: " + seq_num);
+                            System.out.print(seq_num + ", ");
                             byte[] packetData = new byte[bufSize - 2];
                             System.arraycopy(bufferRec, 2, packetData, 0, bufSize - 2);
                             fileData.put(seq_num, packetData);
                         }
+                        Thread.sleep(500);
                     }
                 }
-            } catch (IOException e) {
+            } catch (IOException | InterruptedException e) {
                 System.out.println("Timed out, rerunning...");
                 this.run();
             }

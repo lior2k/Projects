@@ -203,14 +203,18 @@ public class Server implements Runnable {
                         break;
                     }
                     String[] missing_packets = client_answer.split(",");
-
+                    System.out.println("Client requested the following: " + client_answer);
+                    System.out.print("Sending: ");
                     int sendPort = 2002;
-                    for (String packet_num : missing_packets)
+                    for (String packet_num : missing_packets) {
                         if (!packet_num.equals("")) {
+                            System.out.print(Integer.parseInt(packet_num) + ", ");
                             udpSocket.send(new DatagramPacket(fileData.get(Integer.parseInt(packet_num)), bufSize, ip, sendPort));
                         }
+                        Thread.sleep(500);
+                    }
                 }
-            } catch (IOException e) {
+            } catch (IOException | InterruptedException e) {
                 System.out.println("Timed out, rerunning...");
                 this.run();
             }
