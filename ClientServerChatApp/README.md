@@ -43,7 +43,7 @@ javac --module-path C:\Users\lior2\javafx-sdk-18\lib --add-modules javafx.contro
 Run the server from your IDE or compile using 'Javac Server.java' then run 'Java Server'.
 Run the client using Java command. See below:
 ```
-java --module-path %JAVA_FX% --add-modules javafx.controls,javafx.fxml ClientApplication
+java --module-path C:\Users\lior2\javafx-sdk-18\lib --add-modules javafx.controls,javafx.fxml ClientApplication
 ```
 
 ## Author
