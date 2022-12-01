@@ -154,6 +154,10 @@ public class ClientController {
         DatagramSocket udpSocket;
         InetAddress ip;
         HashMap<Integer, byte[]> fileData;
+        int listenPort = 2002;
+        int sendPort = 2000;
+        int sockTimeOut = 2500;
+        int bufSize = 2048;
 
         public DownloadThread(String metaData) {
             String[] data = metaData.split(",");
@@ -161,10 +165,8 @@ public class ClientController {
             this.numOfPackets = Integer.parseInt(data[2]);
             this.initFileMap();
             try {
-                int listenPort = 2002;
                 udpSocket = new DatagramSocket(listenPort);
                 udpSocket.setReuseAddress(true);
-                int sockTimeOut = 2500;
                 udpSocket.setSoTimeout(sockTimeOut);
                 ip = InetAddress.getLocalHost();
             } catch (SocketException | UnknownHostException e) {
@@ -186,6 +188,8 @@ public class ClientController {
                     str.append(i).append(",");
                 }
             }
+            if (!str.toString().equals(""))
+                str = new StringBuilder(str.substring(0, str.length() - 1));
             return str.toString();
         }
 
@@ -204,11 +208,12 @@ public class ClientController {
 
         @Override
         public void run() {
+            byte[] bufferRec;
+            byte[] missing_packets_bytes;
             try {
                 while (true) {
                     String missing_packets = checkSum();
-                    System.out.println("debug: missing packets sent to server: " + missing_packets);
-                    int sendPort = 2000;
+
                     if (missing_packets.equals("")) {
                         System.out.println("debug: received all packets, done.");
                         byte[] bufferSend = "done".getBytes();
@@ -216,13 +221,14 @@ public class ClientController {
                         break;
                     }
 
-                    byte[] packets_num = missing_packets.getBytes();
-                    udpSocket.send(new DatagramPacket(packets_num, packets_num.length, ip, sendPort));
+                    int missing_packets_num = missing_packets.split(",").length;
+                    missing_packets_bytes = missing_packets.getBytes();
+                    udpSocket.send(new DatagramPacket(missing_packets_bytes, missing_packets_bytes.length, ip, sendPort));
+                    System.out.println("debug: missing packets sent to server: " + missing_packets);
+
                     System.out.print("Receiving packets: ");
-                    int missing_packets_num = missing_packets.split(",").length - 1;
                     for (int i = 0; i <= missing_packets_num; i++) {
-                        int bufSize = 2048;
-                        byte[] bufferRec = new byte[bufSize];
+                        bufferRec = new byte[bufSize];
                         udpSocket.receive(new DatagramPacket(bufferRec, bufferRec.length));
                         int seq_num = Integer.parseInt("" + (char)bufferRec[0] + (char)bufferRec[1]);
                         if (fileData.get(seq_num) == null) {
@@ -231,10 +237,9 @@ public class ClientController {
                             System.arraycopy(bufferRec, 2, packetData, 0, bufSize - 2);
                             fileData.put(seq_num, packetData);
                         }
-                        Thread.sleep(500);
                     }
                 }
-            } catch (IOException | InterruptedException e) {
+            } catch (IOException e) {
                 System.out.println("Timed out, rerunning...");
                 this.run();
             }

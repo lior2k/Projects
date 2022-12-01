@@ -67,15 +67,13 @@ public class Server implements Runnable {
     }
 
     public class HandleClient implements Runnable {
-        private final Socket client_socket;
         private final BufferedReader in;
         private final PrintWriter out;
         private String user_name;
 
         public HandleClient(Socket client) throws IOException {
-            this.client_socket = client;
-            out = new PrintWriter(client_socket.getOutputStream(), true);
-            in = new BufferedReader(new InputStreamReader(client_socket.getInputStream()));
+            out = new PrintWriter(client.getOutputStream(), true);
+            in = new BufferedReader(new InputStreamReader(client.getInputStream()));
         }
 
         private void updateOnline() {
@@ -101,19 +99,19 @@ public class Server implements Runnable {
         }
 
         private HashMap<Integer, byte[]> readFile(String fileName) throws IOException {
+            byte[] bytes;
             HashMap<Integer, byte[]> fileData = new HashMap<>();
             FileInputStream fileStream = new FileInputStream("resources\\files\\" + fileName);
-            byte[] buffer = new byte[2046];
-            int bytesRead = -1;
+            int bufSize = 2048;
+            byte[] dataBuffer = new byte[bufSize - 2];
             int i = 1;
-            String sequence_num_str;
-            while ((bytesRead = fileStream.read(buffer)) != -1) {
-                sequence_num_str = (i < 10) ? "0" + i : "" + i;
-                byte[] sequence_num_bytes = sequence_num_str.getBytes();
-                byte[] bytes = new byte[2048];
-                bytes[0] = sequence_num_bytes[0];
-                bytes[1] = sequence_num_bytes[1];
-                System.arraycopy(buffer, 0, bytes, 2, 2046);
+            String sequence_num;
+            while (fileStream.read(dataBuffer) != -1) {
+                sequence_num = (i < 10) ? "0" + i : "" + i;
+                bytes = new byte[bufSize];
+                bytes[0] = sequence_num.getBytes()[0];
+                bytes[1] = sequence_num.getBytes()[1];
+                System.arraycopy(dataBuffer, 0, bytes, 2, bufSize-2);
                 fileData.put(i, bytes);
                 i++;
             }
@@ -131,6 +129,8 @@ public class Server implements Runnable {
                 updateOnline();
                 updateFileList();
                 String message;
+                String[] messageSplit;
+                HashMap<Integer, byte[]> fileData;
                 while((message = in.readLine()) != null) {
                     System.out.println("debug: received " + message);
                     if (message.startsWith("!quit")) {
@@ -139,7 +139,7 @@ public class Server implements Runnable {
                         updateOnline();
                         break;
                     } else if (message.startsWith("<>")) {
-                        String[] messageSplit = message.split("<>");
+                        messageSplit = message.split("<>");
                         String client_name = messageSplit[1];
                         String msg = messageSplit[2];
                         HandleClient target = getClient(client_name);
@@ -147,13 +147,13 @@ public class Server implements Runnable {
                             target.out.println("<>private<>" + this.user_name + "<>" + msg);
                         }
                     } else if (message.startsWith("><fileRequest><")) {
-                        String[] messageSplit = message.split("><");
+                        messageSplit = message.split("><");
                         String fileName = messageSplit[2]; // including suffix (type) eg .txt
                         if (!fileNames.contains(fileName)) {
                             System.out.println("File - '" + fileName + "' - not found, download process stopped");
                         } else {
-                            // get and send file meta data;
-                            HashMap<Integer, byte[]> fileData = readFile(fileName);
+                            // get and send file metadata;
+                            fileData = readFile(fileName);
                             String metaData = "!file_data!," + fileName + "," + fileData.size(); // fileData = num of packets.
                             out.println(metaData);
                             //send file in a new thread over udp connection
@@ -175,12 +175,14 @@ public class Server implements Runnable {
         private final HashMap<Integer, byte[]> fileData;
         private DatagramSocket udpSocket;
         private InetAddress ip;
+        int listenPort = 2000;
+        int sendPort = 2002;
+        int sockTimeOut = 2500;
+        int bufSize = 2048;
 
         public SendFileThread(HashMap<Integer, byte[]> fileData) {
             this.fileData = fileData;
             try {
-                int sockTimeOut = 2500;
-                int listenPort = 2000;
                 udpSocket = new DatagramSocket(listenPort);
                 udpSocket.setReuseAddress(true);
                 udpSocket.setSoTimeout(sockTimeOut);
@@ -192,29 +194,27 @@ public class Server implements Runnable {
 
         @Override
         public void run() {
+            byte[] bufferRec;
             try {
                 while (true) {
-                    int bufSize = 2048;
-                    byte[] bufferRec = new byte[bufSize /2];
+                    bufferRec = new byte[bufSize /2];
                     udpSocket.receive(new DatagramPacket(bufferRec, bufferRec.length));
                     String client_answer = data(bufferRec).toString();
                     if (client_answer.equals("done")) {
                         System.out.println("received done");
                         break;
                     }
+
                     String[] missing_packets = client_answer.split(",");
                     System.out.println("Client requested the following: " + client_answer);
                     System.out.print("Sending: ");
-                    int sendPort = 2002;
                     for (String packet_num : missing_packets) {
-                        if (!packet_num.equals("")) {
-                            System.out.print(Integer.parseInt(packet_num) + ", ");
-                            udpSocket.send(new DatagramPacket(fileData.get(Integer.parseInt(packet_num)), bufSize, ip, sendPort));
-                        }
-                        Thread.sleep(500);
+                        System.out.print(Integer.parseInt(packet_num) + ", ");
+                        udpSocket.send(new DatagramPacket(fileData.get(Integer.parseInt(packet_num)), bufSize, ip, sendPort));
                     }
+                    System.out.println();
                 }
-            } catch (IOException | InterruptedException e) {
+            } catch (IOException e) {
                 System.out.println("Timed out, rerunning...");
                 this.run();
             }
